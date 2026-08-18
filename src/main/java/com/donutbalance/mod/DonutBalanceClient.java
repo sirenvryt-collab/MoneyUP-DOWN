@@ -1,10 +1,12 @@
 package com.donutbalance.mod;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -12,12 +14,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
 
 public class DonutBalanceClient implements ClientModInitializer {
 	public static final String MOD_ID = "donutbalance";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+	// DonutSMP API keys are 32-character hex strings. This lets us pick the
+	// key out of whatever message /api prints without hardcoding its exact
+	// wording (which can change).
+	private static final Pattern API_KEY_PATTERN = Pattern.compile("\\b[0-9a-fA-F]{32}\\b");
 
 	private ModConfig config;
 	private final BalanceTracker tracker = new BalanceTracker();
@@ -37,7 +47,39 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 		ClientCommandRegistrationCallback.EVENT.register(this::registerCommands);
 
-		LOGGER.info("Donut Balance Tracker loaded. Edit config/donutbalance.json to set your API key. Use /moneycheck in-game.");
+		// Auto-capture the API key: whenever the player runs /api on
+		// DonutSMP, the server's reply is scanned for a key and saved
+		// automatically. No file editing required.
+		ClientReceiveMessageEvents.GAME.register(this::onGameMessage);
+
+		LOGGER.info("Donut Balance Tracker loaded. Run /api in-game once to set your key automatically, then use /moneycheck.");
+	}
+
+	private void onGameMessage(Text message, boolean overlay) {
+		if (overlay) {
+			return; // action bar messages, not chat/system messages
+		}
+		String content = message.getString();
+		Matcher matcher = API_KEY_PATTERN.matcher(content);
+		if (!matcher.find()) {
+			return;
+		}
+		String foundKey = matcher.group();
+		if (foundKey.equals(config.apiKey)) {
+			return; // already have this key, nothing to do
+		}
+
+		config.apiKey = foundKey;
+		config.save();
+
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client.player != null) {
+			client.player.sendMessage(
+					Text.literal("[Donut Balance Tracker] API key detected and saved automatically. Try /moneycheck!")
+							.formatted(Formatting.GREEN),
+					false);
+		}
+		LOGGER.info("Auto-detected and saved a DonutSMP API key from chat.");
 	}
 
 	private void registerCommands(CommandDispatcher<FabricClientCommandSource> dispatcher, net.minecraft.command.CommandRegistryAccess registryAccess) {
@@ -45,7 +87,25 @@ public class DonutBalanceClient implements ClientModInitializer {
 				.executes(context -> {
 					runMoneyCheck(context.getSource());
 					return 1;
-				}));
+				})
+				.then(literal("setkey")
+						.then(argument("key", StringArgumentType.greedyString())
+								.executes(context -> {
+									String key = StringArgumentType.getString(context, "key").trim();
+									config.apiKey = key;
+									config.save();
+									context.getSource().sendFeedback(
+											Text.literal("API key saved.").formatted(Formatting.GREEN));
+									return 1;
+								})))
+				.then(literal("clearkey")
+						.executes(context -> {
+							config.apiKey = "";
+							config.save();
+							context.getSource().sendFeedback(
+									Text.literal("API key cleared.").formatted(Formatting.YELLOW));
+							return 1;
+						})));
 	}
 
 	private void runMoneyCheck(FabricClientCommandSource source) {
@@ -53,7 +113,7 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 		if (config.apiKey == null || config.apiKey.isBlank()) {
 			source.sendError(Text.literal(
-					"No API key set. Get one with /api in-game, then put it in config/donutbalance.json"));
+					"No API key yet. Just run /api in-game on DonutSMP once and it'll be saved automatically."));
 			return;
 		}
 		if (client.getSession() == null) {
