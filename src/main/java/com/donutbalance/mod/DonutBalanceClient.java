@@ -84,10 +84,10 @@ public class DonutBalanceClient implements ClientModInitializer {
 		double balance = tracker.getCurrentBalance();
 		double delta = tracker.getDelta();
 
-		String balanceStr = String.format(Locale.US, "$%,.0f", balance);
+		String balanceStr = "$" + formatMoney(balance);
 		Formatting deltaColor = delta > 0 ? Formatting.GREEN : delta < 0 ? Formatting.RED : Formatting.GRAY;
 		String sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
-		String deltaStr = String.format(Locale.US, "%s$%,.0f", sign, Math.abs(delta));
+		String deltaStr = sign + "$" + formatMoney(Math.abs(delta));
 
 		Text message = Text.literal("Balance: ").formatted(Formatting.GOLD)
 				.append(Text.literal(balanceStr).formatted(Formatting.WHITE))
@@ -95,6 +95,29 @@ public class DonutBalanceClient implements ClientModInitializer {
 				.append(Text.literal(deltaStr).formatted(deltaColor));
 
 		source.sendFeedback(message);
+	}
+
+	/**
+	 * Abbreviates large numbers the way DonutSMP players talk about money:
+	 * 15,000,000 -> "15M", 2,700,000,000 -> "2.7B", 950 -> "950".
+	 * Uses short scale: K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15 (quadrillion).
+	 */
+	private static String formatMoney(double value) {
+		double[] thresholds = {1e15, 1e12, 1e9, 1e6, 1e3};
+		String[] suffixes = {"Q", "T", "B", "M", "K"};
+
+		for (int i = 0; i < thresholds.length; i++) {
+			if (value >= thresholds[i]) {
+				double scaled = value / thresholds[i];
+				String formatted = String.format(Locale.US, "%.1f", scaled);
+				// Drop a trailing ".0" so "15.0M" reads as "15M"
+				if (formatted.endsWith(".0")) {
+					formatted = formatted.substring(0, formatted.length() - 2);
+				}
+				return formatted + suffixes[i];
+			}
+		}
+		return String.format(Locale.US, "%,.0f", value);
 	}
 
 	private void onTick(MinecraftClient client) {
