@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "donutbalance",
+  "version": "${version}",
+  "name": "Donut Balance Tracker",
+  "description": "Shows a HUD overlay with how much your DonutSMP balance is up or down since midnight.",
+  "authors": [
+    "you"
+  ],
+  "contact": {
+    "homepage": "https://github.com/YOUR_USERNAME/donut-balance-mod",
+    "issues": "https://github.com/YOUR_USERNAME/donut-balance-mod/issues"
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.donutbalance.mod.DonutBalanceClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}
