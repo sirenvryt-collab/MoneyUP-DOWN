@@ -24,9 +24,6 @@ public class DonutBalanceClient implements ClientModInitializer {
 	public static final String MOD_ID = "donutbalance";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-	// DonutSMP API keys are 32-character hex strings. This lets us pick the
-	// key out of whatever message /api prints without hardcoding its exact
-	// wording (which can change).
 	private static final Pattern API_KEY_PATTERN = Pattern.compile("\\b[0-9a-fA-F]{32}\\b");
 
 	private ModConfig config;
@@ -36,8 +33,6 @@ public class DonutBalanceClient implements ClientModInitializer {
 	private int tickCounter = 0;
 	private boolean requestInFlight = false;
 
-	// Only used to phrase the "not found" message; actual page size varies
-	// by leaderboard response and isn't guaranteed, so this is a rough guess.
 	private static final int pageSizeHint = 10;
 
 	@Override
@@ -161,7 +156,7 @@ public class DonutBalanceClient implements ClientModInitializer {
 		String balanceStr = "$" + formatExact(balance);
 		Formatting deltaColor = delta > 0 ? Formatting.GREEN : delta < 0 ? Formatting.RED : Formatting.GRAY;
 		String sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
-		String deltaStr = sign + "$" + formatExact(Math.abs(delta));
+		String deltaStr = sign + "$" + formatAbbrev(Math.abs(delta));
 
 		Text message = Text.literal("Balance: ").formatted(Formatting.GOLD)
 				.append(Text.literal(balanceStr).formatted(Formatting.WHITE))
@@ -173,6 +168,27 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 	/** Exact value with thousands separators, e.g. 2731400000 -> "2,731,400,000". */
 	private static String formatExact(double value) {
+		return String.format(Locale.US, "%,.0f", value);
+	}
+
+	/**
+	 * Abbreviates large numbers the way DonutSMP players talk about money:
+	 * 15,000,000 -> "15M", 2,700,000,000 -> "2.7B", 950 -> "950".
+	 */
+	private static String formatAbbrev(double value) {
+		double[] thresholds = {1e15, 1e12, 1e9, 1e6, 1e3};
+		String[] suffixes = {"Q", "T", "B", "M", "K"};
+
+		for (int i = 0; i < thresholds.length; i++) {
+			if (value >= thresholds[i]) {
+				double scaled = value / thresholds[i];
+				String formatted = String.format(Locale.US, "%.1f", scaled);
+				if (formatted.endsWith(".0")) {
+					formatted = formatted.substring(0, formatted.length() - 2);
+				}
+				return formatted + suffixes[i];
+			}
+		}
 		return String.format(Locale.US, "%,.0f", value);
 	}
 
