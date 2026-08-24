@@ -26,6 +26,14 @@ public class ModConfig {
 	/** How often (in seconds) to poll the DonutSMP API for your balance. */
 	public int refreshIntervalSeconds = 60;
 
+	/**
+	 * There's no "get my rank" endpoint -- finding your baltop position means
+	 * paging through /leaderboards/money/{page} until your name shows up.
+	 * This caps how many pages /moneycheck will search before giving up, so
+	 * it doesn't send unbounded requests if you're far down the list.
+	 */
+	public int maxBaltopSearchPages = 50;
+
 	public static ModConfig load() {
 		if (Files.exists(PATH)) {
 			try {
