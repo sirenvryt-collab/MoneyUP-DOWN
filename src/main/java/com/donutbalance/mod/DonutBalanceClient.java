@@ -36,20 +36,16 @@ public class DonutBalanceClient implements ClientModInitializer {
 	private int tickCounter = 0;
 	private boolean requestInFlight = false;
 
+	// Only used to phrase the "not found" message; actual page size varies
+	// by leaderboard response and isn't guaranteed, so this is a rough guess.
+	private static final int pageSizeHint = 10;
+
 	@Override
 	public void onInitializeClient() {
 		this.config = ModConfig.load();
 
-		// Keep the midnight baseline current in the background, even if the
-		// player never types the command, so /moneycheck is accurate the
-		// moment they use it.
 		ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
-
 		ClientCommandRegistrationCallback.EVENT.register(this::registerCommands);
-
-		// Auto-capture the API key: whenever the player runs /api on
-		// DonutSMP, the server's reply is scanned for a key and saved
-		// automatically. No file editing required.
 		ClientReceiveMessageEvents.GAME.register(this::onGameMessage);
 
 		LOGGER.info("Donut Balance Tracker loaded. Run /api in-game once to set your key automatically, then use /moneycheck.");
@@ -57,7 +53,7 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 	private void onGameMessage(Text message, boolean overlay) {
 		if (overlay) {
-			return; // action bar messages, not chat/system messages
+			return;
 		}
 		String content = message.getString();
 		Matcher matcher = API_KEY_PATTERN.matcher(content);
@@ -66,7 +62,7 @@ public class DonutBalanceClient implements ClientModInitializer {
 		}
 		String foundKey = matcher.group();
 		if (foundKey.equals(config.apiKey)) {
-			return; // already have this key, nothing to do
+			return;
 		}
 
 		config.apiKey = foundKey;
@@ -127,8 +123,8 @@ public class DonutBalanceClient implements ClientModInitializer {
 		requestInFlight = true;
 		api.fetchBalance(username, config.apiKey)
 				.whenComplete((balance, error) -> client.execute(() -> {
-					requestInFlight = false;
 					if (error != null) {
+						requestInFlight = false;
 						LOGGER.warn("DonutSMP balance fetch failed: {}", error.getMessage());
 						tracker.onFetchFailed(error.getMessage());
 						source.sendError(Text.literal("DonutSMP: " + error.getMessage()));
@@ -137,6 +133,24 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 					tracker.onBalanceFetched(balance);
 					reportBalance(source);
+
+					api.findBaltopRank(username, config.apiKey, config.maxBaltopSearchPages)
+							.whenComplete((rank, rankError) -> client.execute(() -> {
+								requestInFlight = false;
+								if (rankError != null) {
+									LOGGER.warn("Baltop rank lookup failed: {}", rankError.getMessage());
+									source.sendError(Text.literal("Baltop rank: lookup failed (" + rankError.getMessage() + ")"));
+									return;
+								}
+								if (rank == -1) {
+									source.sendFeedback(Text.literal(
+											"Baltop rank: not found in top " + config.maxBaltopSearchPages * pageSizeHint
+													+ " (or beyond search limit)").formatted(Formatting.GRAY));
+								} else {
+									source.sendFeedback(Text.literal("Baltop rank: ").formatted(Formatting.GOLD)
+											.append(Text.literal("#" + rank).formatted(Formatting.AQUA)));
+								}
+							}));
 				}));
 	}
 
@@ -144,10 +158,10 @@ public class DonutBalanceClient implements ClientModInitializer {
 		double balance = tracker.getCurrentBalance();
 		double delta = tracker.getDelta();
 
-		String balanceStr = "$" + formatMoney(balance);
+		String balanceStr = "$" + formatExact(balance);
 		Formatting deltaColor = delta > 0 ? Formatting.GREEN : delta < 0 ? Formatting.RED : Formatting.GRAY;
 		String sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
-		String deltaStr = sign + "$" + formatMoney(Math.abs(delta));
+		String deltaStr = sign + "$" + formatExact(Math.abs(delta));
 
 		Text message = Text.literal("Balance: ").formatted(Formatting.GOLD)
 				.append(Text.literal(balanceStr).formatted(Formatting.WHITE))
@@ -157,26 +171,8 @@ public class DonutBalanceClient implements ClientModInitializer {
 		source.sendFeedback(message);
 	}
 
-	/**
-	 * Abbreviates large numbers the way DonutSMP players talk about money:
-	 * 15,000,000 -> "15M", 2,700,000,000 -> "2.7B", 950 -> "950".
-	 * Uses short scale: K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15 (quadrillion).
-	 */
-	private static String formatMoney(double value) {
-		double[] thresholds = {1e15, 1e12, 1e9, 1e6, 1e3};
-		String[] suffixes = {"Q", "T", "B", "M", "K"};
-
-		for (int i = 0; i < thresholds.length; i++) {
-			if (value >= thresholds[i]) {
-				double scaled = value / thresholds[i];
-				String formatted = String.format(Locale.US, "%.1f", scaled);
-				// Drop a trailing ".0" so "15.0M" reads as "15M"
-				if (formatted.endsWith(".0")) {
-					formatted = formatted.substring(0, formatted.length() - 2);
-				}
-				return formatted + suffixes[i];
-			}
-		}
+	/** Exact value with thousands separators, e.g. 2731400000 -> "2,731,400,000". */
+	private static String formatExact(double value) {
 		return String.format(Locale.US, "%,.0f", value);
 	}
 
