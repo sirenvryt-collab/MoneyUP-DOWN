@@ -65,10 +65,9 @@ public class DonutApiClient {
 
 	/**
 	 * Searches the /leaderboards/money/{page} pages, in order, for the given
-	 * username, and returns their 1-based rank. There is no "get my rank"
-	 * endpoint -- this is genuinely a page-by-page search, so it's capped at
-	 * maxPages to avoid an unbounded number of requests if the player is far
-	 * down the list. Returns -1 if not found within maxPages.
+	 * username, and returns their rank. There is no "get my rank" endpoint --
+	 * this is genuinely a page-by-page search, so it's capped at maxPages.
+	 * Returns -1 if not found within maxPages.
 	 */
 	public CompletableFuture<Integer> findBaltopRank(String username, String apiKey, int maxPages) {
 		return findRankFromPage(username, apiKey, 1, maxPages, 0);
@@ -78,20 +77,26 @@ public class DonutApiClient {
 		if (page > maxPages) {
 			return CompletableFuture.completedFuture(-1);
 		}
-		return fetchLeaderboardPage(page, apiKey).thenCompose(names -> {
-			if (names.isEmpty()) {
+		return fetchLeaderboardPage(page, apiKey).thenCompose(entries -> {
+			if (entries.isEmpty()) {
 				return CompletableFuture.completedFuture(-1);
 			}
-			for (int i = 0; i < names.size(); i++) {
-				if (names.get(i).equalsIgnoreCase(username)) {
-					return CompletableFuture.completedFuture(countSoFar + i + 1);
+			for (int i = 0; i < entries.size(); i++) {
+				LeaderboardEntry entry = entries.get(i);
+				if (entry.name.equalsIgnoreCase(username)) {
+					// Prefer the rank DonutSMP's own API assigns this entry
+					// (accounts for ties/gaps we wouldn't otherwise see);
+					// only fall back to counting position ourselves if the
+					// response doesn't include one.
+					int rank = entry.rank != null ? entry.rank : (countSoFar + i + 1);
+					return CompletableFuture.completedFuture(rank);
 				}
 			}
-			return findRankFromPage(username, apiKey, page + 1, maxPages, countSoFar + names.size());
+			return findRankFromPage(username, apiKey, page + 1, maxPages, countSoFar + entries.size());
 		});
 	}
 
-	private CompletableFuture<List<String>> fetchLeaderboardPage(int page, String apiKey) {
+	private CompletableFuture<List<LeaderboardEntry>> fetchLeaderboardPage(int page, String apiKey) {
 		HttpRequest request = HttpRequest.newBuilder()
 				.uri(URI.create(BASE_URL + "/leaderboards/money/" + page))
 				.header("Authorization", "Bearer " + apiKey)
@@ -105,11 +110,11 @@ public class DonutApiClient {
 					if (response.statusCode() != 200) {
 						throw new RuntimeException("Leaderboard request failed (HTTP " + response.statusCode() + ")");
 					}
-					return parseLeaderboardNames(response.body());
+					return parseLeaderboardEntries(response.body());
 				});
 	}
 
-	private List<String> parseLeaderboardNames(String body) {
+	private List<LeaderboardEntry> parseLeaderboardEntries(String body) {
 		JsonElement root = JsonParser.parseString(body);
 		JsonArray array;
 		if (root.isJsonArray()) {
@@ -122,19 +127,44 @@ public class DonutApiClient {
 			return List.of();
 		}
 
-		List<String> names = new ArrayList<>();
+		List<LeaderboardEntry> entries = new ArrayList<>();
 		for (JsonElement el : array) {
 			if (!el.isJsonObject()) {
 				continue;
 			}
 			JsonObject obj = el.getAsJsonObject();
+
+			String name = null;
 			for (String key : new String[] {"username", "name", "player", "player_name"}) {
 				if (obj.has(key) && !obj.get(key).isJsonNull()) {
-					names.add(obj.get(key).getAsString());
+					name = obj.get(key).getAsString();
 					break;
 				}
 			}
+			if (name == null) {
+				continue;
+			}
+
+			Integer rank = null;
+			for (String key : new String[] {"rank", "position", "place"}) {
+				if (obj.has(key) && !obj.get(key).isJsonNull() && obj.get(key).getAsJsonPrimitive().isNumber()) {
+					rank = obj.get(key).getAsInt();
+					break;
+				}
+			}
+
+			entries.add(new LeaderboardEntry(name, rank));
 		}
-		return names;
+		return entries;
+	}
+
+	private static final class LeaderboardEntry {
+		final String name;
+		final Integer rank;
+
+		LeaderboardEntry(String name, Integer rank) {
+			this.name = name;
+			this.rank = rank;
+		}
 	}
 }
