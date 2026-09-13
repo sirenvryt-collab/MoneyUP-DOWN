@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Thin wrapper around https://api.donutsmp.net/v1
@@ -21,11 +22,22 @@ import java.util.concurrent.CompletableFuture;
  */
 public class DonutApiClient {
 	private static final String BASE_URL = "https://api.donutsmp.net/v1";
+
+	// 502/503/504 mean DonutSMP's own servers are struggling (gateway/
+	// overload issues), not that anything is wrong with the request. Worth
+	// a few quick automatic retries before giving up.
+	private static final int MAX_RETRIES = 3;
+	private static final long BASE_RETRY_DELAY_MS = 1000;
+
 	private final HttpClient http = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10))
 			.build();
 
 	public CompletableFuture<Double> fetchBalance(String username, String apiKey) {
+		return fetchBalanceAttempt(username, apiKey, 0);
+	}
+
+	private CompletableFuture<Double> fetchBalanceAttempt(String username, String apiKey, int attempt) {
 		HttpRequest request = HttpRequest.newBuilder()
 				.uri(URI.create(BASE_URL + "/stats/" + username))
 				.header("Authorization", "Bearer " + apiKey)
@@ -35,15 +47,24 @@ public class DonutApiClient {
 				.build();
 
 		return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-				.thenApply(response -> {
-					if (response.statusCode() == 401 || response.statusCode() == 403) {
-						throw new RuntimeException("API key rejected (HTTP " + response.statusCode()
+				.thenCompose(response -> {
+					int status = response.statusCode();
+
+					if (isRetryableStatus(status) && attempt < MAX_RETRIES) {
+						return retryAfterDelay(attempt, () -> fetchBalanceAttempt(username, apiKey, attempt + 1));
+					}
+					if (status == 401 || status == 403) {
+						throw new RuntimeException("API key rejected (HTTP " + status
 								+ "). Get a fresh key by running /api in-game again.");
 					}
-					if (response.statusCode() != 200) {
-						throw new RuntimeException("DonutSMP API returned HTTP " + response.statusCode());
+					if (isRetryableStatus(status)) {
+						throw new RuntimeException("DonutSMP's servers are having issues (HTTP " + status
+								+ "). Try again in a bit.");
 					}
-					return parseBalance(response.body());
+					if (status != 200) {
+						throw new RuntimeException("DonutSMP API returned HTTP " + status);
+					}
+					return CompletableFuture.completedFuture(parseBalance(response.body()));
 				});
 	}
 
@@ -77,17 +98,13 @@ public class DonutApiClient {
 		if (page > maxPages) {
 			return CompletableFuture.completedFuture(-1);
 		}
-		return fetchLeaderboardPage(page, apiKey).thenCompose(entries -> {
+		return fetchLeaderboardPage(page, apiKey, 0).thenCompose(entries -> {
 			if (entries.isEmpty()) {
 				return CompletableFuture.completedFuture(-1);
 			}
 			for (int i = 0; i < entries.size(); i++) {
 				LeaderboardEntry entry = entries.get(i);
 				if (entry.name.equalsIgnoreCase(username)) {
-					// Prefer the rank DonutSMP's own API assigns this entry
-					// (accounts for ties/gaps we wouldn't otherwise see);
-					// only fall back to counting position ourselves if the
-					// response doesn't include one.
 					int rank = entry.rank != null ? entry.rank : (countSoFar + i + 1);
 					return CompletableFuture.completedFuture(rank);
 				}
@@ -96,7 +113,7 @@ public class DonutApiClient {
 		});
 	}
 
-	private CompletableFuture<List<LeaderboardEntry>> fetchLeaderboardPage(int page, String apiKey) {
+	private CompletableFuture<List<LeaderboardEntry>> fetchLeaderboardPage(int page, String apiKey, int attempt) {
 		HttpRequest request = HttpRequest.newBuilder()
 				.uri(URI.create(BASE_URL + "/leaderboards/money/" + page))
 				.header("Authorization", "Bearer " + apiKey)
@@ -106,12 +123,33 @@ public class DonutApiClient {
 				.build();
 
 		return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-				.thenApply(response -> {
-					if (response.statusCode() != 200) {
-						throw new RuntimeException("Leaderboard request failed (HTTP " + response.statusCode() + ")");
+				.thenCompose(response -> {
+					int status = response.statusCode();
+
+					if (isRetryableStatus(status) && attempt < MAX_RETRIES) {
+						return retryAfterDelay(attempt, () -> fetchLeaderboardPage(page, apiKey, attempt + 1));
 					}
-					return parseLeaderboardEntries(response.body());
+					if (isRetryableStatus(status)) {
+						throw new RuntimeException("DonutSMP's servers are having issues (HTTP " + status + ")");
+					}
+					if (status != 200) {
+						throw new RuntimeException("Leaderboard request failed (HTTP " + status + ")");
+					}
+					return CompletableFuture.completedFuture(parseLeaderboardEntries(response.body()));
 				});
+	}
+
+	private static boolean isRetryableStatus(int status) {
+		return status == 502 || status == 503 || status == 504;
+	}
+
+	/** Waits with exponential backoff (1s, 2s, 4s, ...) then runs the retry. */
+	private static <T> CompletableFuture<T> retryAfterDelay(int attempt, java.util.function.Supplier<CompletableFuture<T>> retry) {
+		long delayMs = BASE_RETRY_DELAY_MS * (1L << attempt);
+		DonutBalanceClient.LOGGER.warn("DonutSMP API is returning a gateway error, retrying in {}ms (attempt {})", delayMs, attempt + 1);
+		return CompletableFuture
+				.supplyAsync(() -> null, CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS))
+				.thenCompose(ignored -> retry.get());
 	}
 
 	private List<LeaderboardEntry> parseLeaderboardEntries(String body) {
