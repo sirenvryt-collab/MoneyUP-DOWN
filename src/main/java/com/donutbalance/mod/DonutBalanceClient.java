@@ -33,6 +33,12 @@ public class DonutBalanceClient implements ClientModInitializer {
 	private int tickCounter = 0;
 	private boolean requestInFlight = false;
 
+	// While a check is failing (e.g. DonutSMP outage), poll much more often
+	// than the normal interval so the moment their API recovers, this mod
+	// grabs a balance right away and that becomes today's "since midnight"
+	// baseline automatically -- no need to keep spamming /moneycheck.
+	private static final int FAST_RETRY_SECONDS = 15;
+
 	private static final int pageSizeHint = 10;
 
 	@Override
@@ -123,6 +129,10 @@ public class DonutBalanceClient implements ClientModInitializer {
 						LOGGER.warn("DonutSMP balance fetch failed: {}", error.getMessage());
 						tracker.onFetchFailed(error.getMessage());
 						source.sendError(Text.literal("DonutSMP: " + error.getMessage()));
+						source.sendFeedback(Text.literal(
+								"Not a problem on your end -- I'll keep checking every " + FAST_RETRY_SECONDS
+										+ "s in the background. Whenever it succeeds, that becomes today's \"since midnight\" baseline automatically.")
+								.formatted(Formatting.GRAY));
 						return;
 					}
 
@@ -166,15 +176,10 @@ public class DonutBalanceClient implements ClientModInitializer {
 		source.sendFeedback(message);
 	}
 
-	/** Exact value with thousands separators, e.g. 2731400000 -> "2,731,400,000". */
 	private static String formatExact(double value) {
 		return String.format(Locale.US, "%,.0f", value);
 	}
 
-	/**
-	 * Abbreviates large numbers the way DonutSMP players talk about money:
-	 * 15,000,000 -> "15M", 2,700,000,000 -> "2.7B", 950 -> "950".
-	 */
 	private static String formatAbbrev(double value) {
 		double[] thresholds = {1e15, 1e12, 1e9, 1e6, 1e3};
 		String[] suffixes = {"Q", "T", "B", "M", "K"};
@@ -201,7 +206,8 @@ public class DonutBalanceClient implements ClientModInitializer {
 		}
 
 		tickCounter++;
-		int intervalTicks = Math.max(20, config.refreshIntervalSeconds * 20);
+		int retrySeconds = tracker.getLastError() != null ? FAST_RETRY_SECONDS : config.refreshIntervalSeconds;
+		int intervalTicks = Math.max(20, retrySeconds * 20);
 		if (tickCounter < intervalTicks) {
 			return;
 		}
