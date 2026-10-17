@@ -34,6 +34,9 @@ public class ModConfig {
 	 */
 	public int maxBaltopSearchPages = 50;
 
+	/** Show the small "Live: +125.6M" HUD at the top of the screen. Off by default. */
+	public boolean hudEnabled = false;
+
 	public static ModConfig load() {
 		if (Files.exists(PATH)) {
 			try {
