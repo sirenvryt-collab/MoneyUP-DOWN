@@ -86,11 +86,11 @@ public class DonutBalanceClient implements ClientModInitializer {
 		int x = (context.getScaledWindowWidth() - textWidth) / 2;
 		int y = 6;
 
-		context.getMatrices().push();
-		context.getMatrices().translate(0, 0, 300);
+		// No matrix calls on purpose: DrawContext.getMatrices() changed type
+		// between Minecraft versions and crashes if the mod is built for a
+		// different version than the one you're running.
 		context.fill(x - 4, y - 3, x + textWidth + 4, y + 11, 0xA0000000);
 		context.drawText(client.textRenderer, text, x, y, color, true);
-		context.getMatrices().pop();
 	}
 
 	private void onGameMessage(Text message, boolean overlay) {
