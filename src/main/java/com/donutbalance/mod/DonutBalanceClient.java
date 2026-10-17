@@ -35,6 +35,7 @@ public class DonutBalanceClient implements ClientModInitializer {
 
 	private int tickCounter = 0;
 	private boolean requestInFlight = false;
+	private boolean hudLogged = false;
 
 	// While a check is failing (e.g. DonutSMP outage), poll much more often
 	// than the normal interval so the moment their API recovers, this mod
@@ -61,32 +62,34 @@ public class DonutBalanceClient implements ClientModInitializer {
 			return;
 		}
 		MinecraftClient client = MinecraftClient.getInstance();
-		if (client.player == null || client.options.hudHidden || client.getDebugHud().shouldShowDebugHud()) {
+		if (client.player == null || client.options.hudHidden) {
 			return;
+		}
+		if (!hudLogged) {
+			hudLogged = true;
+			LOGGER.info("Live HUD is rendering.");
 		}
 
 		String text;
 		int color;
 		if (!tracker.hasData()) {
 			text = "Live: --";
-			color = 0xAAAAAA;
+			color = 0xFFAAAAAA;
 		} else {
 			double delta = tracker.getDelta();
 			String sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
 			text = "Live: " + sign + formatAbbrev(Math.abs(delta));
-			color = delta > 0 ? 0x55FF55 : delta < 0 ? 0xFF5555 : 0xAAAAAA;
+			color = delta > 0 ? 0xFF55FF55 : delta < 0 ? 0xFFFF5555 : 0xFFAAAAAA;
 		}
 
-		float scale = 0.85f;
 		int textWidth = client.textRenderer.getWidth(text);
-		float x = (context.getScaledWindowWidth() - textWidth * scale) / 2f;
-		float y = 4f;
+		int x = (context.getScaledWindowWidth() - textWidth) / 2;
+		int y = 6;
 
 		context.getMatrices().push();
-		context.getMatrices().translate(x, y, 0);
-		context.getMatrices().scale(scale, scale, 1f);
-		context.fill(-3, -2, textWidth + 3, 10, 0x80000000);
-		context.drawText(client.textRenderer, text, 0, 0, color, true);
+		context.getMatrices().translate(0, 0, 300);
+		context.fill(x - 4, y - 3, x + textWidth + 4, y + 11, 0xA0000000);
+		context.drawText(client.textRenderer, text, x, y, color, true);
 		context.getMatrices().pop();
 	}
 
