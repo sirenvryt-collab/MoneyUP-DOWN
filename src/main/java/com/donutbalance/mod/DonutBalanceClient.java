@@ -7,7 +7,10 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import org.slf4j.Logger;
@@ -48,8 +51,43 @@ public class DonutBalanceClient implements ClientModInitializer {
 		ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
 		ClientCommandRegistrationCallback.EVENT.register(this::registerCommands);
 		ClientReceiveMessageEvents.GAME.register(this::onGameMessage);
+		HudRenderCallback.EVENT.register(this::onHudRender);
 
 		LOGGER.info("Donut Balance Tracker loaded. Run /api in-game once to set your key automatically, then use /moneycheck.");
+	}
+
+	private void onHudRender(DrawContext context, RenderTickCounter tickCounter) {
+		if (!config.hudEnabled) {
+			return;
+		}
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client.player == null || client.options.hudHidden || client.getDebugHud().shouldShowDebugHud()) {
+			return;
+		}
+
+		String text;
+		int color;
+		if (!tracker.hasData()) {
+			text = "Live: --";
+			color = 0xAAAAAA;
+		} else {
+			double delta = tracker.getDelta();
+			String sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
+			text = "Live: " + sign + formatAbbrev(Math.abs(delta));
+			color = delta > 0 ? 0x55FF55 : delta < 0 ? 0xFF5555 : 0xAAAAAA;
+		}
+
+		float scale = 0.85f;
+		int textWidth = client.textRenderer.getWidth(text);
+		float x = (context.getScaledWindowWidth() - textWidth * scale) / 2f;
+		float y = 4f;
+
+		context.getMatrices().push();
+		context.getMatrices().translate(x, y, 0);
+		context.getMatrices().scale(scale, scale, 1f);
+		context.fill(-3, -2, textWidth + 3, 10, 0x80000000);
+		context.drawText(client.textRenderer, text, 0, 0, color, true);
+		context.getMatrices().pop();
 	}
 
 	private void onGameMessage(Text message, boolean overlay) {
@@ -85,6 +123,19 @@ public class DonutBalanceClient implements ClientModInitializer {
 					runMoneyCheck(context.getSource());
 					return 1;
 				})
+				.then(literal("hud")
+						.executes(context -> {
+							setHud(context.getSource(), !config.hudEnabled);
+							return 1;
+						})
+						.then(literal("on").executes(context -> {
+							setHud(context.getSource(), true);
+							return 1;
+						}))
+						.then(literal("off").executes(context -> {
+							setHud(context.getSource(), false);
+							return 1;
+						})))
 				.then(literal("setkey")
 						.then(argument("key", StringArgumentType.greedyString())
 								.executes(context -> {
@@ -103,6 +154,13 @@ public class DonutBalanceClient implements ClientModInitializer {
 									Text.literal("API key cleared.").formatted(Formatting.YELLOW));
 							return 1;
 						})));
+	}
+
+	private void setHud(FabricClientCommandSource source, boolean enabled) {
+		config.hudEnabled = enabled;
+		config.save();
+		source.sendFeedback(Text.literal("Live HUD " + (enabled ? "enabled." : "disabled."))
+				.formatted(enabled ? Formatting.GREEN : Formatting.YELLOW));
 	}
 
 	private void runMoneyCheck(FabricClientCommandSource source) {
